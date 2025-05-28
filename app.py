@@ -1,41 +1,91 @@
 import sys
+import json
+import os
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QLabel, QPushButton,
                              QVBoxLayout, QWidget, QListWidget, QListWidgetItem,
                              QLineEdit, QTextEdit, QDateEdit, QDateTimeEdit,
-                             QHBoxLayout, QMessageBox, QCheckBox)
-import PyQt5.QtCore
+                             QHBoxLayout, QMessageBox, QCheckBox, QDialog,
+                             QDialogButtonBox, QFormLayout, QFileDialog)
+from PyQt5.QtCore import Qt, QDate
 from PyQt5 import QtWidgets
 
 
 class Task:
-    def __init__(self, title, description, due_date, notifications=None, subtasks=None):
+    def __init__(self, title, description, due_date, notifications=None, subtasks=None, attachments=None,
+                 completed=False):
         self.title = title
         self.description = description
         self.due_date = due_date
         self.notifications = notifications if notifications else []
         self.subtasks = subtasks if subtasks else []
-        self.completed = False
+        self.attachments = attachments if attachments else []
+        self.completed = completed
+
+    def to_dict(self):
+        return {
+            'title': self.title,
+            'description': self.description,
+            'due_date': self.due_date.toString(Qt.ISODate),
+            'notifications': self.notifications,
+            'subtasks': self.subtasks,
+            'attachments': self.attachments,
+            'completed': self.completed
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        due_date = QDate.fromString(data['due_date'], Qt.ISODate)
+        return cls(
+            data['title'],
+            data['description'],
+            due_date,
+            data['notifications'],
+            data['subtasks'],
+            data['attachments'],
+            data['completed']
+        )
+
+
+class LoginDialog(QDialog):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Авторизация")
+        self.setFixedSize(300, 150)
+
+        layout = QVBoxLayout()
+
+        form_layout = QFormLayout()
+        self.username_input = QLineEdit()
+        self.password_input = QLineEdit()
+        self.password_input.setEchoMode(QLineEdit.Password)
+        form_layout.addRow("Логин:", self.username_input)
+        form_layout.addRow("Пароль:", self.password_input)
+
+        layout.addLayout(form_layout)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+
+        layout.addWidget(buttons)
+        self.setLayout(layout)
+
+    def get_credentials(self):
+        return self.username_input.text(), self.password_input.text()
 
 
 class Window(QMainWindow):
-    def __init__(self):
+    def __init__(self, username):
         super(Window, self).__init__()
-
-        # Инициализация тестовых данных
-        self.current_user = "User1"
-        self.tasks = [
-            Task("Задача 1", "Описание задачи 1", PyQt5.QtCore.QDate.currentDate().addDays(1),
-                 ["Уведомление 1"], ["Подзадача 1"]),
-            Task("Задача 2", "Описание задачи 2", PyQt5.QtCore.QDate.currentDate(),
-                 ["Уведомление 2", "Уведомление 3"], ["Подзадача 2", "Подзадача 3"]),
-            Task("Задача 3", "Описание задачи 3", PyQt5.QtCore.QDate.currentDate().addDays(-1))
-        ]
+        self.current_user = username
+        self.data_file = f"{username}_tasks.json"
+        self.tasks = self.load_tasks()
 
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle("Task Manager")
-        self.setGeometry(300, 300, 800, 600)
+        self.setWindowTitle(f"Task Manager - {self.current_user}")
+        self.setGeometry(300, 300, 900, 700)
 
         # Главный виджет и layout
         self.central_widget = QWidget()
@@ -68,7 +118,7 @@ class Window(QMainWindow):
 
         self.due_date_edit = QDateEdit()
         self.due_date_edit.setCalendarPopup(True)
-        self.due_date_edit.setDate(PyQt5.QtCore.QDate.currentDate())
+        self.due_date_edit.setDate(QDate.currentDate())
         self.right_layout.addWidget(QLabel("Срок выполнения:"))
         self.right_layout.addWidget(self.due_date_edit)
 
@@ -104,6 +154,16 @@ class Window(QMainWindow):
         self.btn_add_notification.clicked.connect(self.add_notification)
         self.right_layout.addWidget(self.btn_add_notification)
 
+        # Список вложений
+        self.right_layout.addWidget(QLabel("Вложения:"))
+        self.attachments_list = QListWidget()
+        self.right_layout.addWidget(self.attachments_list)
+
+        # Кнопка для добавления вложений
+        self.btn_add_attachment = QPushButton("Добавить файл")
+        self.btn_add_attachment.clicked.connect(self.add_attachment)
+        self.right_layout.addWidget(self.btn_add_attachment)
+
         # Кнопки сохранения и создания новой задачи
         self.btn_save = QPushButton("Сохранить изменения")
         self.btn_save.clicked.connect(self.save_task)
@@ -123,22 +183,53 @@ class Window(QMainWindow):
         # Скрываем детали до выбора задачи
         self.right_panel.setEnabled(False)
 
+    def load_tasks(self):
+        """Загружает задачи из файла или создаёт первую задачу при первом запуске"""
+        if os.path.exists(self.data_file):
+            with open(self.data_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return [Task.from_dict(task_data) for task_data in data]
+
+        # Если файла нет - создаём первую задачу
+        first_task = Task(
+            title="Моя первая задача",
+            description="Это пример задачи. Можете отредактировать или удалить её",
+            due_date=QDate.currentDate().addDays(3),
+            notifications=["Пример уведомления"],
+            subtasks=["Подзадача 1", "Подзадача 2"]
+        )
+
+        # Сохраняем в файл
+        with open(self.data_file, 'w', encoding='utf-8') as f:
+            json.dump([first_task.to_dict()], f, ensure_ascii=False, indent=2)
+
+        return [first_task]
+
+    def save_tasks(self):
+        """Сохраняет задачи в файл"""
+        with open(self.data_file, 'w', encoding='utf-8') as f:
+            tasks_data = [task.to_dict() for task in self.tasks]
+            json.dump(tasks_data, f, ensure_ascii=False, indent=2)
+
     def refresh_task_list(self):
         """Обновляет список задач для текущего пользователя"""
         self.task_list.clear()
-        today = PyQt5.QtCore.QDate.currentDate()
+        today = QDate.currentDate()
 
         for task in self.tasks:
-            if task.due_date >= today:  # Показываем только задачи на сегодня и позже
-                item = QListWidgetItem(f"{task.title} - {task.due_date.toString('dd.MM.yyyy')}")
-                item.setData(PyQt5.QtCore.Qt.UserRole, task)
-                if task.completed:
-                    item.setBackground(PyQt5.QtCore.Qt.green)
-                self.task_list.addItem(item)
+            item = QListWidgetItem(f"{task.title} - {task.due_date.toString('dd.MM.yyyy')}")
+            item.setData(Qt.UserRole, task)
+
+            if task.completed:
+                item.setBackground(Qt.green)
+            elif task.due_date < today:
+                item.setBackground(Qt.red)
+
+            self.task_list.addItem(item)
 
     def show_task_details(self, item):
         """Показывает детали выбранной задачи"""
-        self.current_task = item.data(PyQt5.QtCore.Qt.UserRole)
+        self.current_task = item.data(Qt.UserRole)
         self.right_panel.setEnabled(True)
 
         self.task_title.setText(self.current_task.title)
@@ -156,6 +247,11 @@ class Window(QMainWindow):
         for notification in self.current_task.notifications:
             self.notifications_list.addItem(notification)
 
+        # Обновляем список вложений
+        self.attachments_list.clear()
+        for attachment in self.current_task.attachments:
+            self.attachments_list.addItem(attachment)
+
     def save_task(self):
         """Сохраняет изменения в задаче"""
         if not hasattr(self, 'current_task'):
@@ -166,19 +262,21 @@ class Window(QMainWindow):
         self.current_task.due_date = self.due_date_edit.date()
         self.current_task.completed = self.completed_checkbox.isChecked()
 
+        self.save_tasks()
         QMessageBox.information(self, "Сохранено", "Изменения сохранены")
         self.refresh_task_list()
 
     def new_task(self):
         """Создает новую задачу"""
-        new_task = Task("Новая задача", "", PyQt5.QtCore.QDate.currentDate().addDays(1))
+        new_task = Task("Новая задача", "", QDate.currentDate().addDays(1))
         self.tasks.append(new_task)
+        self.save_tasks()
 
         # Выбираем новую задачу в списке
         self.refresh_task_list()
         for i in range(self.task_list.count()):
             item = self.task_list.item(i)
-            if item.data(PyQt5.QtCore.Qt.UserRole) == new_task:
+            if item.data(Qt.UserRole) == new_task:
                 self.task_list.setCurrentItem(item)
                 self.show_task_details(item)
                 break
@@ -193,6 +291,7 @@ class Window(QMainWindow):
             self.current_task.subtasks.append(subtask)
             self.subtasks_list.addItem(subtask)
             self.new_subtask_input.clear()
+            self.save_tasks()
 
     def add_notification(self):
         """Добавляет уведомление к текущей задаче"""
@@ -204,13 +303,55 @@ class Window(QMainWindow):
             self.current_task.notifications.append(notification)
             self.notifications_list.addItem(notification)
             self.new_notification_input.clear()
+            self.save_tasks()
+
+    def add_attachment(self):
+        """Добавляет вложение к текущей задаче"""
+        if not hasattr(self, 'current_task'):
+            return
+
+        file_path, _ = QFileDialog.getOpenFileName(self, "Выберите файл")
+        if file_path:
+            file_name = os.path.basename(file_path)
+            self.current_task.attachments.append(file_name)
+            self.attachments_list.addItem(file_name)
+
+            # Сохраняем файл в папку с данными пользователя
+            user_data_dir = f"{self.current_user}_attachments"
+            os.makedirs(user_data_dir, exist_ok=True)
+            dest_path = os.path.join(user_data_dir, file_name)
+
+            if not os.path.exists(dest_path):
+                with open(file_path, 'rb') as src, open(dest_path, 'wb') as dst:
+                    dst.write(src.read())
+
+            self.save_tasks()
+
+    def closeEvent(self, event):
+        """Сохраняет задачи при закрытии приложения"""
+        self.save_tasks()
+        event.accept()
 
 
 def application():
     app = QApplication(sys.argv)
-    window = Window()
-    window.show()
-    sys.exit(app.exec_())
+
+    # Авторизация
+    login_dialog = LoginDialog()
+    if login_dialog.exec_() == QDialog.Accepted:
+        username, password = login_dialog.get_credentials()
+
+        # Проверка логина и пароля
+        if username == "bka" and password == "123":
+            window = Window(username)
+            window.show()
+            sys.exit(app.exec_())
+        else:
+            QMessageBox.warning(None, "Ошибка", "Неверный логин или пароль")
+            sys.exit(1)
+    else:
+        sys.exit(0)
 
 
-application()
+if __name__ == "__main__":
+    application()
